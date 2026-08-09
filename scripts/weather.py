@@ -1,9 +1,45 @@
 #!/usr/bin/env python3
 """中央气象台(nmc.cn)天气查询。用法: python3 weather.py [城市名]"""
-import sys, json, requests
+import sys, json, os, re, requests
 
 BASE = "https://www.nmc.cn/rest"
 H = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "city_cache.json")
+SUFFIX = "市县区旗盟"
+
+
+class AmbiguityError(Exception):
+    """城市名有多个候选（重名），需要大模型追问用户确认。"""
+
+    def __init__(self, name, cands):
+        self.name, self.cands = name, cands
+
+
+def base(n):
+    return re.sub(rf"[{SUFFIX}]+$", "", n)
+
+
+def load_cache():
+    try:
+        return json.load(open(CACHE))
+    except Exception:
+        return {}
+
+
+def save_cache(cache):
+    json.dump(cache, open(CACHE, "w"), ensure_ascii=False, indent=2)
+
+
+def candidates(name, cities):
+    """候选城市。带后缀=明确指定（唯一）；短名=所有基名相同（可能多个→歧义）。"""
+    if name.endswith(tuple(SUFFIX)):
+        exact = [c for c in cities if c["city"] == name]
+        if exact:
+            return exact
+        b = base(name)
+        return [c for c in cities if c["city"] == b]
+    b = base(name)
+    return [c for c in cities if base(c["city"]) == b]
 
 
 def get(path, **params):
@@ -13,24 +49,25 @@ def get(path, **params):
 
 
 def find_city(name):
-    """省 code → 城市 code。先匹配省级，未命中则全扫 34 省城市列表。"""
+    """省 code → 城市 code。先查本地缓存（城市 code 固定不变），miss 才请求接口并缓存。"""
+    cache = load_cache()
+    if name in cache:
+        return cache[name]
     provs = get("/province/all")
-    for p in provs:
-        if name in p["name"]:
-            cities = get(f"/province/{p['code']}")
-            for c in cities:
-                if name in c["city"]:
-                    return c
-    print(f"[~] 省级未匹配「{name}」，正在扫描全部 34 省城市列表…")
+    cities = []
     for p in provs:
         try:
-            cities = get(f"/province/{p['code']}")
+            cities.extend(get(f"/province/{p['code']}"))
         except Exception:
             continue
-        for c in cities:
-            if name in c["city"]:
-                return c
-    return None
+    cands = candidates(name, cities)
+    if len(cands) > 1:
+        raise AmbiguityError(name, cands)
+    if not cands:
+        return None
+    cache[name] = cands[0]
+    save_cache(cache)
+    return cands[0]
 
 
 def fmt_w(w):
@@ -39,7 +76,14 @@ def fmt_w(w):
 
 def main():
     name = sys.argv[1] if len(sys.argv) > 1 else "北京"
-    city = find_city(name)
+    try:
+        city = find_city(name)
+    except AmbiguityError as e:
+        print(f"[歧义] 「{e.name}」匹配到 {len(e.cands)} 个城市，请确认是哪一个：")
+        for i, c in enumerate(e.cands, 1):
+            print(f"  {i}. {c['province']} {c['city']}")
+        print(f"请回答带省市的全称（如「北京朝阳」），再查询。")
+        sys.exit(2)
     if not city:
         print(f"[!] 未找到城市: {name}")
         sys.exit(1)
