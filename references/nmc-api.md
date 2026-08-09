@@ -153,5 +153,6 @@ GET https://www.nmc.cn/rest/weather?stationid={城市code}
 ## 使用注意
 
 1. **stationid 用城市短码**（Wqsps），不是气象站 5 位编号（54511 返回空 data）
+2. **城市 code 固定不变**，脚本已做本地缓存（`city_cache.json`），查询过的城市下次直接读缓存
 3. 请求需带浏览器 User-Agent，否则可能被拦
 4. 接口为公开免费，无官方文档/无速率限制声明，请勿高频调用
